@@ -22,12 +22,12 @@ graph TD
     end
 
     subgraph RAG Pipeline
-        B[1️⃣ Extract Text\nfrom PDF]
+        B[1️⃣ Extract Text from PDF]
         C[2️⃣ Chunk Text]
-        D[3️⃣ Generate Embeddings\n(Sentence Transformer)]
+        D[3️⃣ Generate Embeddings (Sentence Transformer)]
         E[4️⃣ Store in OpenSearch]
         F[6️⃣ Retrieve Relevant Chunks]
-        G[7️⃣ Generate Response\n(Ollama Mistral)]
+        G[7️⃣ Generate Response (Ollama Mistral)]
         H[8️⃣ Return Final Answer]
     end
 
