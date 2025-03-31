@@ -24,10 +24,10 @@ graph TD
     subgraph RAG Pipeline
         B[1️⃣ Extract Text from PDF]
         C[2️⃣ Chunk Text]
-        D[3️⃣ Generate Embeddings (Sentence Transformer)]
+        D[3️⃣ Generate Embeddings ]
         E[4️⃣ Store in OpenSearch]
         F[6️⃣ Retrieve Relevant Chunks]
-        G[7️⃣ Generate Response (Ollama Mistral)]
+        G[7️⃣ Generate Response with Mistral]
         H[8️⃣ Return Final Answer]
     end
 
