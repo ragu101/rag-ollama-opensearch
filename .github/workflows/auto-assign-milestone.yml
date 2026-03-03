@@ -1,0 +1,61 @@
+name: Auto-Assign Milestone to PR
+
+on:
+  workflow_run:
+    workflows: ["Auto-Link PR to Issue"]
+    types: [completed]
+
+permissions:
+  pull-requests: write
+  issues: read
+
+jobs:
+  auto-assign-milestone:
+    runs-on: ubuntu-latest
+    # Only run if the upstream auto-link workflow succeeded
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - name: Fetch linked issue milestone and assign to PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          echo "Finding PR for branch '$HEAD_BRANCH'..."
+
+          # Look up the open PR whose head branch matches
+          PR_NUM=$(gh api "repos/$REPO_OWNER/$REPO_NAME/pulls?state=open&per_page=100" \
+            --jq ".[] | select(.head.ref == \"$HEAD_BRANCH\") | .number" | head -1)
+
+          if [ -z "$PR_NUM" ]; then
+            echo "No open PR found for branch '$HEAD_BRANCH'. Skipping."
+            exit 0
+          fi
+
+          PR_URL="https://github.com/$REPO_OWNER/$REPO_NAME/pull/$PR_NUM"
+          echo "Found PR #$PR_NUM — checking for linked issues..."
+
+          # Fetch PR body to find "Closes #<issue>" or similar keywords
+          BODY=$(gh pr view "$PR_URL" --json body --jq '.body')
+
+          # Extract issue number using case-insensitive grep
+          ISSUE_NUM=$(echo "$BODY" | grep -ioE '(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]*#[0-9]+' \
+            | grep -oE '#[0-9]+' | head -1 | tr -d '#')
+
+          if [ -n "$ISSUE_NUM" ]; then
+            echo "Found linked Issue #$ISSUE_NUM"
+
+            # Fetch the milestone of the linked issue
+            MILESTONE_TITLE=$(gh api "repos/$REPO_OWNER/$REPO_NAME/issues/$ISSUE_NUM" --jq '.milestone.title')
+
+            if [ -n "$MILESTONE_TITLE" ] && [ "$MILESTONE_TITLE" != "null" ]; then
+              echo "Issue #$ISSUE_NUM belongs to milestone: $MILESTONE_TITLE"
+              gh pr edit "$PR_URL" --milestone "$MILESTONE_TITLE"
+              echo "✅ Successfully assigned PR #$PR_NUM to milestone '$MILESTONE_TITLE'"
+            else
+              echo "Issue #$ISSUE_NUM does not have a milestone attached."
+            fi
+          else
+            echo "No closing keywords (e.g., Closes #123) found in PR body."
+          fi
