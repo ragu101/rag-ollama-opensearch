@@ -1,0 +1,34 @@
+version: v1
+name: your-app-name
+
+stages:
+  planning:
+    require_milestone: true
+    require_issues_assigned: true
+
+  development:
+    branch: main
+    deploy_target: dev
+    required_checks:
+      - "CI — Build & Test"
+
+  testing:
+    branch_pattern: "release/**"
+    deploy_target: staging
+    required_checks:
+      - "CI — Build & Test"
+      - "Deploy to Staging / test"
+
+  evidencing:
+    required_artifacts:
+      - test-results
+      - test-results-staging
+    required_reviewers:
+      min_approvals: 1
+      teams:
+        - engineering-leads
+
+  deployment:
+    target: production
+    promotion: manual
+    requires_evidence_approval: true

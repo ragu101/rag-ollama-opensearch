@@ -1,0 +1,139 @@
+name: SDLC Enforce
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main, 'release/**']
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: read
+  issues: read
+
+jobs:
+  enforce:
+    name: SDLC Enforce
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read sdlc.yaml
+        id: config
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -f sdlc.yaml ]; then
+            echo "config_exists=true" >> "$GITHUB_OUTPUT"
+            echo "Found local sdlc.yaml"
+          elif gh api "repos/${{ github.repository_owner }}/.github/contents/sdlc.yaml" >/dev/null 2>&1; then
+            echo "config_exists=true" >> "$GITHUB_OUTPUT"
+            echo "Found central sdlc.yaml in .github repo"
+          else
+            echo "config_exists=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No sdlc.yaml found locally or centrally — SDLC enforcement skipped"
+          fi
+
+      - name: Detect context
+        if: steps.config.outputs.config_exists == 'true'
+        id: context
+        run: |
+          echo "event=${{ github.event_name }}" >> "$GITHUB_OUTPUT"
+          echo "ref=${{ github.ref }}" >> "$GITHUB_OUTPUT"
+
+          if [[ "${{ github.ref }}" == refs/heads/release/* ]]; then
+            echo "target=release" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "target=main" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.base_ref }}" == "main" ]]; then
+            echo "target=pr-to-main" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.base_ref }}" == release/* ]]; then
+            echo "target=pr-to-release" >> "$GITHUB_OUTPUT"
+          else
+            echo "target=other" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: "Gate: PRs to release/* require all milestone issues closed"
+        if: steps.context.outputs.target == 'pr-to-release' && steps.config.outputs.config_exists == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Checking milestone issues for release branch PR..."
+
+          # Find milestone matching the release branch version
+          BRANCH="${{ github.base_ref }}"
+          VERSION="${BRANCH#release/}"
+          echo "Release version: $VERSION"
+
+          MILESTONE_NUM=$(gh api "repos/${{ github.repository }}/milestones?state=open&per_page=100" \
+            --jq ".[] | select(.title | test(\"$VERSION\")) | .number" | head -1)
+
+          if [ -z "$MILESTONE_NUM" ]; then
+            echo "::warning::No matching milestone found for $VERSION — skipping issue check"
+            exit 0
+          fi
+
+          OPEN_ISSUES=$(gh api "repos/${{ github.repository }}/issues?milestone=$MILESTONE_NUM&state=open&per_page=100" \
+            --jq '[.[] | select(
+              .pull_request == null and
+              (.title | startswith("Release approval:") | not) and
+              ([.labels[].name] | any(. == "bug") | not)
+            )] | length')
+
+          echo "Open planning issues in milestone (bug/evidence excluded): $OPEN_ISSUES"
+
+          if [ "$OPEN_ISSUES" -gt 0 ]; then
+            echo "::error::SDLC DEVELOPMENT gate failed — $OPEN_ISSUES issue(s) still open in milestone $VERSION. Close all issues before merging to release branch."
+            exit 1
+          fi
+
+          echo "All milestone issues closed — DEVELOPMENT gate passed"
+
+      - name: "Gate: PRs to main require linked issue"
+        if: steps.context.outputs.target == 'pr-to-main' && steps.config.outputs.config_exists == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR_NUM="${{ github.event.pull_request.number }}"
+          if [ -z "$PR_NUM" ]; then
+            echo "::warning::Not a PR event — skipping linked issue check"
+            exit 0
+          fi
+
+          echo "Checking PR #$PR_NUM for linked issues..."
+
+          BODY=$(gh pr view "$PR_NUM" --repo "${{ github.repository }}" --json body --jq '.body')
+
+          if echo "$BODY" | grep -qiE "(close[sd]?|fix(e[sd])?|resolve[sd]?) #[0-9]+"; then
+            echo "PR references an issue — passed"
+          else
+            echo "::warning::PR does not reference a closing issue (e.g., 'Closes #123'). Consider linking to a milestone issue."
+          fi
+
+      - name: "Gate: Push to release/* — verify tests exist"
+        if: steps.context.outputs.target == 'release' && steps.config.outputs.config_exists == 'true'
+        run: |
+          echo "Verifying test configuration exists for release branch..."
+
+          if [ -f sample-app/pom.xml ]; then
+            echo "Maven project detected — tests expected via 'mvn test'"
+          elif [ -f package.json ]; then
+            echo "Node project detected — tests expected via 'npm test'"
+          else
+            echo "::warning::No recognized test framework found"
+          fi
+
+          echo "TESTING gate — push to release branch accepted, CI will run tests"
+
+      - name: Report SDLC status
+        if: always() && steps.config.outputs.config_exists == 'true'
+        run: |
+          echo "## SDLC Enforcement Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Check | Result |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|--------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| sdlc.yaml present | Yes |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Target | ${{ steps.context.outputs.target }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Event | ${{ github.event_name }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Ref | ${{ github.ref }} |" >> "$GITHUB_STEP_SUMMARY"

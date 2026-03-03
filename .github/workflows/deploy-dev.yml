@@ -1,0 +1,21 @@
+name: Deploy to Dev
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'README.md'
+
+jobs:
+  deploy-dev:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # IMPORTANT: Replace this step with your actual development deployment commands!
+      - name: Deploy to Development
+        run: |
+          echo "Simulating deployment to Development Environment..."
+          echo "✅ Dev Deployment Successful"

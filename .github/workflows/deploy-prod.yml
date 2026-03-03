@@ -1,0 +1,28 @@
+name: Deploy to Production
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag to deploy (e.g. v2.1.0)'
+        required: true
+        type: string
+
+jobs:
+  deploy-production:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag_name || github.ref_name }}
+
+      # IMPORTANT: Replace this step with your actual production deployment commands!
+      - name: Deploy to Production
+        run: |
+          echo "Simulating deployment to Production Environment..."
+          echo "Deploying Ref: ${{ github.event.inputs.tag_name || github.ref_name }}"
+          echo "✅ Production Deployment Successful"
