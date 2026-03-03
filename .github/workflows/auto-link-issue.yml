@@ -1,0 +1,94 @@
+name: Auto-Link PR to Issue
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  auto-link:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Parse branch name and link issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          BRANCH_NAME: ${{ github.event.pull_request.head.ref }}
+          REPO_OWNER: ${{ github.repository_owner }}
+        run: |
+          echo "Source Branch: $BRANCH_NAME"
+          
+          # Match Cross-Repo pattern: <repo>-<number>-<description> or <repo>-<number>
+          # Example: api-gateway-45-fix
+          if [[ "$BRANCH_NAME" =~ ([a-zA-Z0-9-]+)-([0-9]+)(-.*)?$ ]]; then
+            REPO_MATCH="${BASH_REMATCH[1]}"
+            ISSUE_NUM="${BASH_REMATCH[2]}"
+            
+            # If the regex matched just a number at the start (e.g., 45-fix), the first group is the number.
+            # Let's use a more precise parsing.
+            
+            # Try matching repo-issue pattern first (e.g., api-gateway-45)
+            # This is tricky because repo names contain dashes. 
+            # Let's extract all numbers.
+          fi
+          
+          # A safer bash regex approach:
+          # 1. Check for cross-repo: [repo-name]-[number]
+          # We'll assume any letters+dashes followed by a number is a cross-repo match, UNLESS it's "feature", "bugfix", "hotfix"
+          
+          # Strip common prefixes first
+          CLEAN_BRANCH=${BRANCH_NAME#feature/}
+          CLEAN_BRANCH=${CLEAN_BRANCH#bugfix/}
+          CLEAN_BRANCH=${CLEAN_BRANCH#hotfix/}
+          CLEAN_BRANCH=${CLEAN_BRANCH#fix/}
+          
+          echo "Clean branch: $CLEAN_BRANCH"
+          
+          REFERENCE=""
+          
+          # Regex 1: Local Issue. Starts with number (e.g., 45-add-login)
+          if [[ "$CLEAN_BRANCH" =~ ^([0-9]+)- ]]; then
+            ISSUE_NUM="${BASH_REMATCH[1]}"
+            REFERENCE="#$ISSUE_NUM"
+            echo "Matched Local Issue format: $REFERENCE"
+            
+          # Regex 2: Local Issue. Ends with number (e.g., add-login-45)
+          elif [[ "$CLEAN_BRANCH" =~ -([0-9]+)$ ]]; then
+            ISSUE_NUM="${BASH_REMATCH[1]}"
+            REFERENCE="#$ISSUE_NUM"
+            echo "Matched Local Issue format: $REFERENCE"
+            
+          # Regex 3: Cross-Repo Issue. <repo>-<number>
+          elif [[ "$CLEAN_BRANCH" =~ ^([a-zA-Z0-9-]+)-([0-9]+)(-|$) ]]; then
+            REPO_NAME="${BASH_REMATCH[1]}"
+            ISSUE_NUM="${BASH_REMATCH[2]}"
+            
+            # If the "repo" is actually just a common word, we can't reliably guess cross-repo vs local word.
+            # But according to our convention: api-gateway-45 -> acme-corp/api-gateway#45
+            REFERENCE="$REPO_OWNER/$REPO_NAME#$ISSUE_NUM"
+            echo "Matched Cross-Repo format: $REFERENCE"
+          else
+            echo "No issue number found in branch name."
+            exit 0
+          fi
+          
+          echo "Target Reference: $REFERENCE"
+          
+          # Fetch current PR body
+          PR_BODY=$(gh pr view "$PR_URL" --json body --jq .body)
+          
+          # Check if reference already exists
+          if echo "$PR_BODY" | grep -qiE "Closes $REFERENCE"; then
+            echo "PR already linked to $REFERENCE. Skipping."
+            exit 0
+          fi
+          
+          echo "Appending 'Closes $REFERENCE' to PR body..."
+          
+          NEW_BODY=$(printf "%s\n\nCloses %s" "$PR_BODY" "$REFERENCE")
+
+          # Update PR body
+          gh pr edit "$PR_URL" --body "$NEW_BODY"
+          echo "Successfully linked PR to $REFERENCE"
