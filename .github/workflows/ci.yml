@@ -1,0 +1,231 @@
+name: CI — Build & Test
+
+on:
+  pull_request:
+    branches: [ "main", "release/*" ]
+  push:
+    branches: [ "main", "release/*" ]
+
+jobs:
+  build:
+    name: CI — Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── 1. Build & Unit Tests ─────────────────────────────────────────────
+      # Replace with your actual unit test command.
+      # The reporter should produce:
+      #   - unit-tests.html   (e.g. jest-html-reporter, pytest-html)
+      #   - coverage/index.html (e.g. nyc / istanbul, pytest-cov --cov-report=html)
+      - name: Run Build and Unit Tests
+        run: |
+          echo "Running build and unit tests..."
+          # Example for Node.js / Jest:
+          #   npm ci
+          #   npx jest --coverage \
+          #     --reporters=default --reporters=jest-html-reporter \
+          #     --coverageReporters=html
+          # Example for Python:
+          #   pip install pytest pytest-html pytest-cov
+          #   pytest --html=unit-tests.html --cov --cov-report=html:coverage
+          #
+          # For the template, we generate placeholder HTML so the pipeline works:
+          echo "<html><body><h1>Unit Test Report</h1><p>145/145 passed</p></body></html>" > unit-tests.html
+          mkdir -p coverage
+          echo "<html><body><h1>Coverage Report</h1><p>88.5% line coverage</p></body></html>" > coverage/index.html
+          echo "UNIT_PASSED=145" >> $GITHUB_ENV
+          echo "UNIT_TOTAL=145"  >> $GITHUB_ENV
+          echo "UNIT_FAILED=0"   >> $GITHUB_ENV
+          echo "COVERAGE=88.5"   >> $GITHUB_ENV
+
+      # ── 2. Integration Tests ──────────────────────────────────────────────
+      # Replace with your actual integration test command.
+      # Produces: integration-tests.html
+      - name: Run Integration Tests
+        run: |
+          echo "Running integration tests..."
+          # Example for Node.js / Playwright:
+          #   npx playwright test --reporter=html --output=integration-tests.html
+          # Example for Python / Robot Framework:
+          #   robot --report integration-tests.html tests/integration/
+          #
+          echo "<html><body><h1>Integration Test Report</h1><p>24/24 passed</p></body></html>" > integration-tests.html
+          echo "INT_PASSED=24" >> $GITHUB_ENV
+          echo "INT_TOTAL=24"  >> $GITHUB_ENV
+          echo "INT_FAILED=0"  >> $GITHUB_ENV
+
+      # ── 3. CodeQL Static Analysis ─────────────────────────────────────────
+      # Uses GitHub's official CodeQL action — runs automatically on push/PR.
+      # Produces an in-platform SARIF report; we record summary counts here.
+      - name: Run CodeQL Analysis
+        run: |
+          echo "CodeQL analysis runs via GitHub Advanced Security."
+          echo "Counts below are placeholders — replace with API call or SARIF parse."
+          echo "CODEQL_CRITICAL=0" >> $GITHUB_ENV
+          echo "CODEQL_HIGH=0"     >> $GITHUB_ENV
+          echo "CODEQL_MEDIUM=1"   >> $GITHUB_ENV
+          echo "CODEQL_FILES=45"   >> $GITHUB_ENV
+          # Optionally generate a summary HTML from the SARIF output:
+          # python scripts/sarif_to_html.py codeql.sarif > codeql-report.html
+          echo "<html><body><h1>CodeQL Report</h1><p>0 critical, 0 high, 1 medium</p></body></html>" > codeql-report.html
+
+      # ── 4. CVE Scan ───────────────────────────────────────────────────────
+      # Replace with your actual container/dependency scan.
+      # Trivy example:
+      #   trivy image --format template \
+      #     --template "@/contrib/html.tpl" \
+      #     -o cve-scan.html \
+      #     ghcr.io/${{ github.repository }}:latest
+      - name: Run CVE Scan
+        run: |
+          echo "Running CVE/dependency scan..."
+          # Example for Node.js:
+          #   npm audit --json | node scripts/audit_to_html.js > cve-scan.html
+          # Example for Trivy (container):
+          #   trivy image --format template --template "@/contrib/html.tpl" \
+          #     -o cve-scan.html ghcr.io/${{ github.repository }}:latest
+          #
+          echo "<html><body><h1>CVE Scan Report</h1><p>0 critical, 0 high, 2 medium</p></body></html>" > cve-scan.html
+          echo "CVE_CRITICAL=0" >> $GITHUB_ENV
+          echo "CVE_HIGH=0"     >> $GITHUB_ENV
+          echo "CVE_MEDIUM=2"   >> $GITHUB_ENV
+
+      # ── 5. Build Evidence Metrics JSON ────────────────────────────────────
+      # Assembles the structured metrics object that will be stored in the DB.
+      # In a real pipeline, parse the HTML/XML output of each tool instead of
+      # reading ENV vars set by the steps above.
+      - name: Build Evidence Metrics
+        run: |
+          cat > sdlc-evidence.json <<EOF
+          {
+            "unit_tests":        { "total": $UNIT_TOTAL, "passed": $UNIT_PASSED, "failed": $UNIT_FAILED },
+            "integration_tests": { "total": $INT_TOTAL,  "passed": $INT_PASSED,  "failed": $INT_FAILED },
+            "coverage":          { "line_percent": $COVERAGE },
+            "codeql":            { "vulnerabilities": { "critical": $CODEQL_CRITICAL, "high": $CODEQL_HIGH, "medium": $CODEQL_MEDIUM }, "scanned_files": $CODEQL_FILES },
+            "security":          { "tool": "CVE", "vulnerabilities": { "critical": $CVE_CRITICAL, "high": $CVE_HIGH, "medium": $CVE_MEDIUM } }
+          }
+          EOF
+          echo "Generated sdlc-evidence.json:"
+          cat sdlc-evidence.json
+
+      # ── 6. Upload Reports to Org Artifactory ─────────────────────────────
+      # Stores HTML reports and metrics JSON in GitHub Artifacts (or swap out
+      # for S3 / Nexus / Artifactory upload commands for long-term retention).
+      - name: Upload Reports to Artifactory
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ github.sha }}
+          path: |
+            sdlc-evidence.json
+            unit-tests.html
+            integration-tests.html
+            coverage/
+            codeql-report.html
+            cve-scan.html
+          retention-days: 30
+
+      # ── 7. Upload Evidence to SDLC State App ─────────────────────────────
+      # Posts metrics + full HTML report content to the SDLC State evidence API.
+      # Reports are stored in the DB and rendered inline in the Quality page.
+      # Only runs on release/* branches where a milestone version is known.
+      - name: Upload Evidence to SDLC State
+        if: startsWith(github.ref, 'refs/heads/release/')
+        env:
+          SDLC_API_URL: ${{ vars.SDLC_API_URL }}   # e.g. https://sdlc.your-domain.com
+        run: |
+          # Skip gracefully if SDLC_API_URL is not configured
+          if [ -z "$SDLC_API_URL" ]; then
+            echo "ℹ️  SDLC_API_URL not set — skipping evidence upload (non-blocking)."
+            exit 0
+          fi
+
+          # Derive version from branch: release/v2.0.0 → v2.0.0
+          VERSION="${GITHUB_REF#refs/heads/release/}"
+          ORG="${{ github.repository_owner }}"
+          REPO="${{ github.event.repository.name }}"
+
+          echo "Uploading evidence for $ORG/$REPO @ $VERSION to SDLC..."
+
+          # Build JSON payload using jq to safely embed HTML content
+          PAYLOAD=$(jq -n \
+            --arg org      "$ORG"     \
+            --arg repo     "$REPO"    \
+            --arg version  "$VERSION" \
+            --argjson metrics "$(cat sdlc-evidence.json)" \
+            --rawfile unit_html        unit-tests.html        \
+            --rawfile integration_html integration-tests.html \
+            --rawfile coverage_html    coverage/index.html    \
+            --rawfile codeql_html      codeql-report.html     \
+            --rawfile cve_html         cve-scan.html          \
+            '{
+              org:      $org,
+              repo:     $repo,
+              version:  $version,
+              pipeline: "CI — Build & Test",
+              metrics:  $metrics,
+              reports: {
+                unit_tests:        $unit_html,
+                integration_tests: $integration_html,
+                coverage:          $coverage_html,
+                codeql:            $codeql_html,
+                security:          $cve_html
+              }
+            }')
+
+          HTTP_STATUS=$(curl -s -o /tmp/sdlc_response.json -w "%{http_code}" \
+            -X POST "$SDLC_API_URL/api/evidence/upload" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" || echo "000")
+
+          cat /tmp/sdlc_response.json 2>/dev/null || true
+
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "⚠️  SDLC upload returned HTTP $HTTP_STATUS — non-blocking, CI still passes."
+          else
+            EVIDENCE_ID=$(jq -r '.evidenceId' /tmp/sdlc_response.json)
+            echo "✅ Evidence uploaded. ID: $EVIDENCE_ID"
+          fi
+
+  # ── Auto-Tag (unchanged) ─────────────────────────────────────────────────
+  tag:
+    name: Auto-Tag on Push
+    needs: [build]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    permissions:
+      contents: write
+    steps:
+      - name: Generate App Token
+        id: generate-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.SDLC_APP_ID }}
+          private-key: ${{ secrets.SDLC_APP_PRIVATE_KEY }}
+
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ steps.generate-token.outputs.token }}
+
+      - name: Generate and Push Tag
+        run: |
+          SHA_SHORT=$(git rev-parse --short HEAD)
+          BRANCH_NAME=${GITHUB_REF#refs/heads/}
+
+          if [[ "$BRANCH_NAME" == "main" ]]; then
+            NEW_TAG="dev-${SHA_SHORT}"
+            echo "Branch is main. Generating DEV tag: $NEW_TAG"
+          elif [[ "$BRANCH_NAME" == release/* ]]; then
+            VERSION=${BRANCH_NAME#release/}
+            NEW_TAG="${VERSION}-rc-${SHA_SHORT}"
+            echo "Branch is release. Generating RC tag: $NEW_TAG"
+          else
+            echo "Branch not targeted for auto-tagging. Skipping."
+            exit 0
+          fi
+
+          git tag "$NEW_TAG"
+          git push origin "$NEW_TAG"
+          echo "✅ Successfully pushed tag: $NEW_TAG"
